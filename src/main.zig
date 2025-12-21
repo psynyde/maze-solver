@@ -1,5 +1,6 @@
 const std = @import("std");
 const Order = std.math.Order;
+
 const sfml = @cImport({
     @cInclude("SFML/Graphics.h");
     @cInclude("SFML/Window.h");
@@ -11,6 +12,8 @@ const MAZE_WIDTH = 25;
 const MAZE_HEIGHT = 20;
 const WINDOW_WIDTH = MAZE_WIDTH * CELL_SIZE;
 const WINDOW_HEIGHT = MAZE_HEIGHT * CELL_SIZE;
+const PLAYER_ANIMATION_SPEED = 0.03; // Higher values = faster player movement
+const PATHFINDING_ANIMATION_SPEED = 0.07; // Higher values = faster pathfinding visualization
 
 const Cell = struct {
     x: usize,
@@ -171,7 +174,7 @@ const Maze = struct {
         }
     }
 
-    fn draw(self: *Maze, window: *sfml.sfRenderWindow, player_pos: sfml.sfVector2f) void {
+    fn draw(self: *Maze, window: *sfml.sfRenderWindow, player_pos: sfml.sfVector2f, start_texture: *sfml.sfTexture, end_texture: *sfml.sfTexture) void {
         const white = sfml.sfColor{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
         for (self.cells, 0..) |row, y| {
@@ -211,9 +214,7 @@ const Maze = struct {
             }
         }
 
-        // Draw start and end markers using images
-        const start_texture = sfml.sfTexture_createFromFile("assets/hipo.png", null);
-        defer sfml.sfTexture_destroy(start_texture);
+        // Draw start and end markers using pre-loaded textures
         const start_sprite = sfml.sfSprite_create();
         defer sfml.sfSprite_destroy(start_sprite);
         sfml.sfSprite_setTexture(start_sprite, start_texture, 1);
@@ -224,8 +225,6 @@ const Maze = struct {
         sfml.sfSprite_setPosition(start_sprite, player_pos);
         sfml.sfRenderWindow_drawSprite(window, start_sprite, null);
 
-        const end_texture = sfml.sfTexture_createFromFile("assets/ishto.png", null);
-        defer sfml.sfTexture_destroy(end_texture);
         const end_sprite = sfml.sfSprite_create();
         defer sfml.sfSprite_destroy(end_sprite);
         sfml.sfSprite_setTexture(end_sprite, end_texture, 1);
@@ -401,7 +400,6 @@ const Pathfinder = struct {
         }
     }
 
-
     fn draw(self: *Pathfinder, window: *sfml.sfRenderWindow) void {
         const visited_color = sfml.sfColor{ .r = 128, .g = 128, .b = 128, .a = 255 };
         const path_color = sfml.sfColor{ .r = 0, .g = 255, .b = 0, .a = 255 };
@@ -466,7 +464,6 @@ const Pathfinder = struct {
     }
 };
 
-
 fn drawOverlay(window: *sfml.sfRenderWindow, lines: []const []const u8, font: *sfml.sfFont) void {
     const text_color = sfml.sfColor{ .r = 255, .g = 255, .b = 255, .a = 255 };
     const bg_color = sfml.sfColor{ .r = 0, .g = 0, .b = 0, .a = 180 };
@@ -523,6 +520,7 @@ fn drawOverlay(window: *sfml.sfRenderWindow, lines: []const []const u8, font: *s
 }
 
 fn drawStats(window: *sfml.sfRenderWindow, font: *sfml.sfFont, pathfinder: ?*Pathfinder, allocator: std.mem.Allocator) !void {
+    _ = allocator;
     if (pathfinder == null) return;
 
     const p = pathfinder.?;
@@ -538,17 +536,11 @@ fn drawStats(window: *sfml.sfRenderWindow, font: *sfml.sfFont, pathfinder: ?*Pat
 
     const visited_count = p.came_from.count();
 
-    var line1_list: std.ArrayList(u8) = .empty;
-    defer line1_list.deinit(allocator);
-    try std.fmt.format(line1_list.writer(allocator), "Algorithm: {s}", .{algo_str});
-    try line1_list.append(allocator, 0);
-    const line1_str = line1_list.items;
-
-    var line2_list: std.ArrayList(u8) = .empty;
-    defer line2_list.deinit(allocator);
-    try std.fmt.format(line2_list.writer(allocator), "Visited: {d}", .{visited_count});
-    try line2_list.append(allocator, 0);
-    const line2_str = line2_list.items;
+    // Use stack-allocated buffers for strings
+    var line1_buf: [32]u8 = undefined;
+    var line2_buf: [32]u8 = undefined;
+    const line1_str = std.fmt.bufPrintZ(&line1_buf, "Algorithm: {s}", .{algo_str}) catch "Algorithm: ?";
+    const line2_str = std.fmt.bufPrintZ(&line2_buf, "Visited: {d}", .{visited_count}) catch "Visited: ?";
 
     const lines = [_][]const u8{
         line1_str,
@@ -622,6 +614,9 @@ pub fn main() !void {
     var player_anim_t: f32 = 0.0;
     var player_pos = sfml.sfVector2f{ .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15, .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15 };
 
+    // Pathfinding animation frame counter
+    var pathfinding_frame_counter: u32 = 0;
+
     // Create window
     const mode = sfml.sfVideoMode{ .width = WINDOW_WIDTH, .height = WINDOW_HEIGHT, .bitsPerPixel = 32 };
     const window = sfml.sfRenderWindow_create(
@@ -642,13 +637,40 @@ pub fn main() !void {
         std.debug.print("Failed to create window\n", .{});
         return error.WindowCreationFailed;
     }
+    const window_ptr = window.?;
+
+    // Load font once (outside the main loop)
+    const font = sfml.sfFont_createFromFile("assets/font.ttf");
+    if (font == null) {
+        std.debug.print("Failed to load font\n", .{});
+        return error.FontLoadFailed;
+    }
+    defer sfml.sfFont_destroy(font);
+    const font_ptr = font.?;
+
+    // Load textures once (outside the main loop)
+    const start_texture = sfml.sfTexture_createFromFile("assets/hipo.png", null);
+    if (start_texture == null) {
+        std.debug.print("Failed to load start texture\n", .{});
+        return error.TextureLoadFailed;
+    }
+    defer sfml.sfTexture_destroy(start_texture);
+    const start_texture_ptr = start_texture.?;
+
+    const end_texture = sfml.sfTexture_createFromFile("assets/ishto.png", null);
+    if (end_texture == null) {
+        std.debug.print("Failed to load end texture\n", .{});
+        return error.TextureLoadFailed;
+    }
+    defer sfml.sfTexture_destroy(end_texture);
+    const end_texture_ptr = end_texture.?;
 
     // Main loop
     var event: sfml.sfEvent = undefined;
-    while (sfml.sfRenderWindow_isOpen(window) == 1) {
-        while (sfml.sfRenderWindow_pollEvent(window, &event) == 1) {
+    while (sfml.sfRenderWindow_isOpen(window_ptr) == 1) {
+        while (sfml.sfRenderWindow_pollEvent(window_ptr, &event) == 1) {
             if (event.type == sfml.sfEvtClosed) {
-                sfml.sfRenderWindow_close(window);
+                sfml.sfRenderWindow_close(window_ptr);
             }
             // Press R to regenerate maze
             if (event.type == sfml.sfEvtKeyPressed and event.key.code == sfml.sfKeyR) {
@@ -670,7 +692,7 @@ pub fn main() !void {
             }
             // Press Q to quit
             if (event.type == sfml.sfEvtKeyPressed and event.key.code == sfml.sfKeyQ) {
-                sfml.sfRenderWindow_close(window);
+                sfml.sfRenderWindow_close(window_ptr);
             }
 
             // Pathfinding
@@ -695,11 +717,15 @@ pub fn main() !void {
 
         if (pathfinder) |p| {
             if (!p.found) {
-                try p.step(&maze);
-                if (p.found and p.path.items.len > 0) {
-                    sliding = true;
-                    player_pos_idx = 0;
-                    player_anim_t = 0;
+                pathfinding_frame_counter += 1;
+                if (pathfinding_frame_counter >= @as(u32, @intFromFloat(1.0 / PATHFINDING_ANIMATION_SPEED))) {
+                    pathfinding_frame_counter = 0;
+                    try p.step(&maze);
+                    if (p.found and p.path.items.len > 0) {
+                        sliding = true;
+                        player_pos_idx = 0;
+                        player_anim_t = 0;
+                    }
                 }
             }
         }
@@ -707,7 +733,7 @@ pub fn main() !void {
         if (sliding and pathfinder != null) {
             const p = pathfinder.?;
             if (player_pos_idx + 1 < p.path.items.len) {
-                player_anim_t += 0.1;
+                player_anim_t += PLAYER_ANIMATION_SPEED;
                 if (player_anim_t >= 1.0) {
                     player_anim_t = 0;
                     player_pos_idx += 1;
@@ -732,18 +758,11 @@ pub fn main() !void {
             }
         }
 
-        sfml.sfRenderWindow_clear(window, sfml.sfColor{ .r = 20, .g = 20, .b = 20, .a = 255 });
+        sfml.sfRenderWindow_clear(window_ptr, sfml.sfColor{ .r = 20, .g = 20, .b = 20, .a = 255 });
         if (pathfinder) |p| {
-            p.draw(window.?);
+            p.draw(window_ptr);
         }
-        maze.draw(window.?, player_pos);
-
-        const font = sfml.sfFont_createFromFile("assets/font.ttf");
-        if (font == null) {
-            std.debug.print("Failed to load font\n", .{});
-            return error.FontLoadFailed;
-        }
-        defer sfml.sfFont_destroy(font);
+        maze.draw(window_ptr, player_pos, start_texture_ptr, end_texture_ptr);
 
         const overlay_lines = [_][]const u8{
             "[R]egenerate",
@@ -751,10 +770,10 @@ pub fn main() !void {
             "[B]FS",
             "[Q]uit",
         };
-        drawOverlay(window.?, &overlay_lines, font.?);
-        try drawStats(window.?, font.?, pathfinder, allocator);
+        drawOverlay(window_ptr, &overlay_lines, font_ptr);
+        try drawStats(window_ptr, font_ptr, pathfinder, allocator);
 
-        sfml.sfRenderWindow_display(window);
+        sfml.sfRenderWindow_display(window_ptr);
     }
 
     std.debug.print("Maze generator closed!\n", .{});
