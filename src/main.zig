@@ -12,13 +12,14 @@ const MAZE_WIDTH = 25;
 const MAZE_HEIGHT = 20;
 const WINDOW_WIDTH = MAZE_WIDTH * CELL_SIZE;
 const WINDOW_HEIGHT = MAZE_HEIGHT * CELL_SIZE;
+
 const PLAYER_ANIMATION_SPEED = 0.03; // Higher values = faster player movement
 const PATHFINDING_ANIMATION_SPEED = 0.07; // Higher values = faster pathfinding visualization
 
 const Cell = struct {
     x: usize,
     y: usize,
-    walls: [4]bool, // top, right, bottom, left
+    walls: [4]bool,
     visited: bool,
 
     fn init(x: usize, y: usize) Cell {
@@ -86,11 +87,21 @@ const Maze = struct {
 
         while (stack.items.len > 0) {
             const current = stack.items[stack.items.len - 1];
-            var neighbors = try self.getUnvisitedNeighbors(current.x, current.y, self.allocator);
+            var neighbors = try self.getUnvisitedNeighbors(
+                current.x,
+                current.y,
+                self.allocator,
+            );
             defer neighbors.deinit(self.allocator);
 
             if (neighbors.items.len > 0) {
-                const next = neighbors.items[random.intRangeAtMost(usize, 0, neighbors.items.len - 1)];
+                const next = neighbors.items[
+                    random.intRangeAtMost(
+                        usize,
+                        0,
+                        neighbors.items.len - 1,
+                    )
+                ];
 
                 // Remove walls between current and next
                 self.removeWalls(current.x, current.y, next.x, next.y);
@@ -103,7 +114,12 @@ const Maze = struct {
         }
     }
 
-    fn getUnvisitedNeighbors(self: *Maze, x: usize, y: usize, allocator: std.mem.Allocator) !std.ArrayList(Position) {
+    fn getUnvisitedNeighbors(
+        self: *Maze,
+        x: usize,
+        y: usize,
+        allocator: std.mem.Allocator,
+    ) !std.ArrayList(Position) {
         var neighbors: std.ArrayList(Position) = .empty;
 
         // Top
@@ -126,7 +142,12 @@ const Maze = struct {
         return neighbors;
     }
 
-    fn getAccessibleNeighbors(self: *Maze, x: usize, y: usize, allocator: std.mem.Allocator) !std.ArrayList(Position) {
+    fn getAccessibleNeighbors(
+        self: *Maze,
+        x: usize,
+        y: usize,
+        allocator: std.mem.Allocator,
+    ) !std.ArrayList(Position) {
         var neighbors: std.ArrayList(Position) = .empty;
         const cell = self.cells[y][x];
 
@@ -174,7 +195,13 @@ const Maze = struct {
         }
     }
 
-    fn draw(self: *Maze, window: *sfml.sfRenderWindow, player_pos: sfml.sfVector2f, start_texture: *sfml.sfTexture, end_texture: *sfml.sfTexture) void {
+    fn draw(
+        self: *Maze,
+        window: *sfml.sfRenderWindow,
+        player_pos: sfml.sfVector2f,
+        start_texture: *sfml.sfTexture,
+        end_texture: *sfml.sfTexture,
+    ) void {
         const white = sfml.sfColor{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
         for (self.cells, 0..) |row, y| {
@@ -232,8 +259,12 @@ const Maze = struct {
         const end_size = sfml.sfTexture_getSize(end_texture);
         const end_scale = (@as(f32, @floatFromInt(CELL_SIZE)) * 0.8) / @as(f32, @floatFromInt(end_size.x));
         sfml.sfSprite_setScale(end_sprite, sfml.sfVector2f{ .x = end_scale, .y = end_scale });
-        const end_x = @as(f32, @floatFromInt((self.width - 1) * CELL_SIZE + @as(usize, @intFromFloat(CELL_SIZE * 0.15))));
-        const end_y = @as(f32, @floatFromInt((self.height - 1) * CELL_SIZE + @as(usize, @intFromFloat(CELL_SIZE * 0.15))));
+        const end_x = @as(f32, @floatFromInt(
+            (self.width - 1) * CELL_SIZE + @as(usize, @intFromFloat(CELL_SIZE * 0.15)),
+        ));
+        const end_y = @as(f32, @floatFromInt(
+            (self.height - 1) * CELL_SIZE + @as(usize, @intFromFloat(CELL_SIZE * 0.15)),
+        ));
         sfml.sfSprite_setPosition(end_sprite, sfml.sfVector2f{ .x = end_x, .y = end_y });
         sfml.sfRenderWindow_drawSprite(window, end_sprite, null);
     }
@@ -252,6 +283,7 @@ fn compareNodes(context: void, a: AStarNode, b: AStarNode) Order {
 const PathfindingAlgorithm = enum {
     BFS,
     AStar,
+    Dijkstra,
 };
 
 const Pathfinder = struct {
@@ -274,7 +306,12 @@ const Pathfinder = struct {
     // For drawing
     path: std.ArrayList(Position),
 
-    fn init(allocator: std.mem.Allocator, algorithm: PathfindingAlgorithm, start_pos: Position, end_pos: Position) Pathfinder {
+    fn init(
+        allocator: std.mem.Allocator,
+        algorithm: PathfindingAlgorithm,
+        start_pos: Position,
+        end_pos: Position,
+    ) Pathfinder {
         return .{
             .algorithm = algorithm,
             .allocator = allocator,
@@ -300,6 +337,16 @@ const Pathfinder = struct {
         self.path.deinit(self.allocator);
     }
 
+    fn reconstructPath(self: *Pathfinder) !void {
+        var path_curr = self.end_pos;
+        while (!Position.eql(path_curr, self.start_pos)) {
+            try self.path.append(self.allocator, path_curr);
+            path_curr = self.came_from.get(path_curr).?;
+        }
+        try self.path.append(self.allocator, self.start_pos);
+        std.mem.reverse(Position, self.path.items);
+    }
+
     fn start(self: *Pathfinder) !void {
         self.active = true;
         self.found = false;
@@ -316,7 +363,14 @@ const Pathfinder = struct {
             .BFS => try self.queue.append(self.allocator, self.start_pos),
             .AStar => {
                 try self.g_score.put(self.start_pos, 0);
-                try self.open_set.add(.{ .pos = self.start_pos, .f_score = self.heuristic(self.start_pos, self.end_pos) });
+                try self.open_set.add(.{
+                    .pos = self.start_pos,
+                    .f_score = self.heuristic(self.start_pos, self.end_pos),
+                });
+            },
+            .Dijkstra => {
+                try self.g_score.put(self.start_pos, 0);
+                try self.open_set.add(.{ .pos = self.start_pos, .f_score = 0 });
             },
         }
     }
@@ -327,6 +381,7 @@ const Pathfinder = struct {
         switch (self.algorithm) {
             .BFS => try self.bfsStep(maze),
             .AStar => try self.aStarStep(maze),
+            .Dijkstra => try self.dijkstraStep(maze),
         }
     }
 
@@ -341,13 +396,7 @@ const Pathfinder = struct {
         if (current.x == self.end_pos.x and current.y == self.end_pos.y) {
             self.found = true;
             self.active = false;
-            // Reconstruct path
-            var path_curr = self.end_pos;
-            while (path_curr.x != self.start_pos.x or path_curr.y != self.start_pos.y) : (path_curr = self.came_from.get(path_curr).?) {
-                try self.path.append(self.allocator, path_curr);
-            }
-            try self.path.append(self.allocator, self.start_pos);
-            std.mem.reverse(Position, self.path.items);
+            try self.reconstructPath();
             return;
         }
 
@@ -374,13 +423,42 @@ const Pathfinder = struct {
         if (current.pos.x == self.end_pos.x and current.pos.y == self.end_pos.y) {
             self.found = true;
             self.active = false;
-            // Reconstruct path
-            var path_curr = self.end_pos;
-            while (path_curr.x != self.start_pos.x or path_curr.y != self.start_pos.y) : (path_curr = self.came_from.get(path_curr).?) {
-                try self.path.append(self.allocator, path_curr);
+            try self.reconstructPath();
+            return;
+        }
+
+        var neighbors = try maze.getAccessibleNeighbors(
+            current.pos.x,
+            current.pos.y,
+            self.allocator,
+        );
+        defer neighbors.deinit(self.allocator);
+
+        for (neighbors.items) |neighbor| {
+            const tentative_g_score = self.g_score.get(current.pos).? + 1;
+            const existing_g_score = self.g_score.get(neighbor);
+
+            if (existing_g_score == null or tentative_g_score < existing_g_score.?) {
+                try self.came_from.put(neighbor, current.pos);
+                try self.g_score.put(neighbor, tentative_g_score);
+                const f_score = tentative_g_score + self.heuristic(neighbor, self.end_pos);
+                try self.open_set.add(.{ .pos = neighbor, .f_score = @intCast(f_score) });
             }
-            try self.path.append(self.allocator, self.start_pos);
-            std.mem.reverse(Position, self.path.items);
+        }
+    }
+
+    fn dijkstraStep(self: *Pathfinder, maze: *Maze) !void {
+        if (self.open_set.peek() == null) {
+            self.active = false;
+            return;
+        }
+
+        const current = self.open_set.remove();
+
+        if (current.pos.x == self.end_pos.x and current.pos.y == self.end_pos.y) {
+            self.found = true;
+            self.active = false;
+            try self.reconstructPath();
             return;
         }
 
@@ -394,7 +472,7 @@ const Pathfinder = struct {
             if (existing_g_score == null or tentative_g_score < existing_g_score.?) {
                 try self.came_from.put(neighbor, current.pos);
                 try self.g_score.put(neighbor, tentative_g_score);
-                const f_score = tentative_g_score + self.heuristic(neighbor, self.end_pos);
+                const f_score = tentative_g_score;
                 try self.open_set.add(.{ .pos = neighbor, .f_score = @intCast(f_score) });
             }
         }
@@ -438,7 +516,14 @@ const Pathfinder = struct {
         }
     }
 
-    fn drawLine(self: *Pathfinder, window: *sfml.sfRenderWindow, p1: sfml.sfVector2f, p2: sfml.sfVector2f, color: sfml.sfColor, thickness: f32) void {
+    fn drawLine(
+        self: *Pathfinder,
+        window: *sfml.sfRenderWindow,
+        p1: sfml.sfVector2f,
+        p2: sfml.sfVector2f,
+        color: sfml.sfColor,
+        thickness: f32,
+    ) void {
         _ = self;
         const line = sfml.sfRectangleShape_create();
         defer sfml.sfRectangleShape_destroy(line);
@@ -519,7 +604,12 @@ fn drawOverlay(window: *sfml.sfRenderWindow, lines: []const []const u8, font: *s
     }
 }
 
-fn drawStats(window: *sfml.sfRenderWindow, font: *sfml.sfFont, pathfinder: ?*Pathfinder, allocator: std.mem.Allocator) !void {
+fn drawStats(
+    window: *sfml.sfRenderWindow,
+    font: *sfml.sfFont,
+    pathfinder: ?*Pathfinder,
+    allocator: std.mem.Allocator,
+) !void {
     _ = allocator;
     if (pathfinder == null) return;
 
@@ -532,6 +622,7 @@ fn drawStats(window: *sfml.sfRenderWindow, font: *sfml.sfFont, pathfinder: ?*Pat
     const algo_str = switch (p.algorithm) {
         .BFS => "BFS",
         .AStar => "A*",
+        .Dijkstra => "Dijkstra",
     };
 
     const visited_count = p.came_from.count();
@@ -612,7 +703,10 @@ pub fn main() !void {
     var sliding = false;
     var player_pos_idx: usize = 0;
     var player_anim_t: f32 = 0.0;
-    var player_pos = sfml.sfVector2f{ .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15, .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15 };
+    var player_pos = sfml.sfVector2f{
+        .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+        .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+    };
 
     // Pathfinding animation frame counter
     var pathfinding_frame_counter: u32 = 0;
@@ -680,7 +774,10 @@ pub fn main() !void {
                     pathfinder = null;
                 }
                 sliding = false;
-                player_pos = sfml.sfVector2f{ .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15, .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15 };
+                player_pos = sfml.sfVector2f{
+                    .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+                    .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+                };
                 // Reset visited flags
                 for (maze.cells) |row| {
                     for (row) |*cell| {
@@ -697,7 +794,7 @@ pub fn main() !void {
 
             // Pathfinding
             if (event.type == sfml.sfEvtKeyPressed) {
-                if (event.key.code == sfml.sfKeyA or event.key.code == sfml.sfKeyB) {
+                if (event.key.code == sfml.sfKeyA or event.key.code == sfml.sfKeyB or event.key.code == sfml.sfKeyD) {
                     if (pathfinder) |p| {
                         p.deinit();
                         allocator.destroy(p);
@@ -705,11 +802,24 @@ pub fn main() !void {
                     sliding = false;
                     player_pos_idx = 0;
                     player_anim_t = 0.0;
-                    player_pos = sfml.sfVector2f{ .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15, .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15 };
+                    player_pos = sfml.sfVector2f{
+                        .x = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+                        .y = @as(f32, @floatFromInt(CELL_SIZE)) * 0.15,
+                    };
 
-                    const algo = if (event.key.code == sfml.sfKeyA) PathfindingAlgorithm.AStar else PathfindingAlgorithm.BFS;
+                    const algo = switch (event.key.code) {
+                        sfml.sfKeyA => PathfindingAlgorithm.AStar,
+                        sfml.sfKeyB => PathfindingAlgorithm.BFS,
+                        sfml.sfKeyD => PathfindingAlgorithm.Dijkstra,
+                        else => unreachable,
+                    };
                     pathfinder = try allocator.create(Pathfinder);
-                    pathfinder.?.* = Pathfinder.init(allocator, algo, .{ .x = 0, .y = 0 }, .{ .x = MAZE_WIDTH - 1, .y = MAZE_HEIGHT - 1 });
+                    pathfinder.?.* = Pathfinder.init(
+                        allocator,
+                        algo,
+                        .{ .x = 0, .y = 0 },
+                        .{ .x = MAZE_WIDTH - 1, .y = MAZE_HEIGHT - 1 },
+                    );
                     try pathfinder.?.start();
                 }
             }
@@ -768,6 +878,7 @@ pub fn main() !void {
             "[R]egenerate",
             "[A]*",
             "[B]FS",
+            "[D]ijkstra",
             "[Q]uit",
         };
         drawOverlay(window_ptr, &overlay_lines, font_ptr);
