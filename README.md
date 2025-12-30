@@ -6,13 +6,12 @@
 
 ### Building:
 ```
-# if using nix:
-$ nix run github:psynyde/maze-solver
-
-# else:
-zig build -j4 --release=safe -Doptimize=ReleaseFast
+$ zig build -j4 --release=safe -Doptimize=ReleaseFast
 ```
-
+#### or using nix:
+```
+$ nix run github:psynyde/maze-solver
+```
 ### Preview:
 https://github.com/user-attachments/assets/5fe10a0e-a2fa-4de1-8df8-7182c17f8a2c
 
