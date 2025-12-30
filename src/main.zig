@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Order = std.math.Order;
 
 const sfml = @cImport({
@@ -14,7 +15,7 @@ const WINDOW_WIDTH = MAZE_WIDTH * CELL_SIZE;
 const WINDOW_HEIGHT = MAZE_HEIGHT * CELL_SIZE;
 
 const PLAYER_ANIMATION_SPEED = 0.03; // Higher values = faster player movement
-const PATHFINDING_ANIMATION_SPEED = 0.07; // Higher values = faster pathfinding visualization
+const PATHFINDING_ANIMATION_SPEED = 0.1; // Higher values = faster pathfinding visualization
 
 const Cell = struct {
     x: usize,
@@ -682,10 +683,15 @@ fn drawStats(
     }
 }
 
+var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = comptime alloc: {
+        if (builtin.mode == .Debug) break :alloc debug_allocator.allocator();
+        break :alloc std.heap.smp_allocator;
+    };
+    defer if (builtin.mode == .Debug) {
+        _ = debug_allocator.deinit();
+    };
 
     // Initialize random number generator
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));

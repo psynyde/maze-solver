@@ -19,6 +19,22 @@
         project = "maze solver and visualizer";
       in
       {
+        packages.default = pkgs.stdenv.mkDerivation {
+          pname = "maze_solver";
+          version = "0.1.0";
+          src = ./.;
+
+          zigBuildFlags = [ "-Doptimize=ReleaseFast" ];
+
+          nativeBuildInputs = with pkgs; [
+            zig.hook
+            pkg-config
+          ];
+
+          buildInputs = with pkgs; [
+            csfml
+          ];
+        };
         devShells.default = pkgs.mkShell {
           name = project;
           LSP_SERVER = "zls";
